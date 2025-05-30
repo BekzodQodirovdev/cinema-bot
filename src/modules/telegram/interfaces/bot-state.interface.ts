@@ -1,0 +1,38 @@
+export interface UserState {
+  step: BotStep;
+  tempData: {
+    movieCode?: string;
+    movieTitle?: string;
+    movieDescription?: string;
+    selectedCaption?: string;
+    movieFile?: {
+      fileId: string;
+      originalCaption?: string;
+      filePath?: string;
+    };
+    adData?: {
+      mediaId?: string;
+      mediaType?: 'photo' | 'video' | 'animation';
+      caption?: string;
+      originalButtons?: Array<{ text: string; url: string }>;
+    };
+  };
+}
+
+export enum BotStep {
+  WAITING_FOR_MOVIE_INFO = 'WAITING_FOR_MOVIE_INFO',
+  WAITING_FOR_MOVIE_FILE = 'WAITING_FOR_MOVIE_FILE',
+  WAITING_FOR_MOVIE_CODE = 'WAITING_FOR_MOVIE_CODE',
+  WAITING_FOR_MOVIE_TITLE = 'WAITING_FOR_MOVIE_TITLE',
+  WAITING_FOR_MOVIE_CODE_TO_DELETE = 'WAITING_FOR_MOVIE_CODE_TO_DELETE',
+  WAITING_FOR_CHANNEL_INFO = 'WAITING_FOR_CHANNEL_INFO',
+  WAITING_FOR_CHANNEL_ID_TO_DELETE = 'WAITING_FOR_CHANNEL_ID_TO_DELETE',
+  WAITING_FOR_AD_MESSAGE = 'WAITING_FOR_AD_MESSAGE',
+  WAITING_FOR_BUTTON_CHOICE = 'WAITING_FOR_BUTTON_CHOICE',
+  WAITING_FOR_BUTTON_URL = 'WAITING_FOR_BUTTON_URL',
+  WAITING_FOR_BROADCAST_MESSAGE = 'WAITING_FOR_BROADCAST_MESSAGE',
+  WAITING_FOR_ADMIN_ID_TO_ADD = 'WAITING_FOR_ADMIN_ID_TO_ADD',
+  WAITING_FOR_ADMIN_ID_TO_REMOVE = 'WAITING_FOR_ADMIN_ID_TO_REMOVE',
+  WAITING_FOR_CAPTION_CHOICE = 'WAITING_FOR_CAPTION_CHOICE',
+  WAITING_FOR_NEW_CAPTION = 'WAITING_FOR_NEW_CAPTION'
+} 
