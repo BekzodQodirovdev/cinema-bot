@@ -6,6 +6,7 @@ export const superAdminKeyboard = () => {
     ['🗑 Kino o\'chirish', '📢 Reklama yuborish'],
     ['💬 Xabar yuborish', '📺 Kanal qo\'shish'],
     ['❌ Kanal o\'chirish', '👨‍💼 Admin qo\'shish'],
-    ['🗑 Admin o\'chirish']
+    ['🗑 Admin o\'chirish', '👨‍💼 Adminlar'],
+    ['📺 Kanallar','📋 Kinolar']
   ]).resize().oneTime();
 };

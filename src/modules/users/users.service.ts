@@ -89,4 +89,11 @@ export class UsersService {
     const user = await this.getUserByTelegramId(telegramId);
     return !!user && user.role === UserRole.SUPER_ADMIN;
   }
+
+  async getAllAdmins(): Promise<UserDocument[]> {
+    return this.userModel.find({
+      role: { $in: [UserRole.ADMIN, UserRole.SUPER_ADMIN] },
+      isActive: true
+    });
+  }
 }

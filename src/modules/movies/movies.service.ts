@@ -89,7 +89,7 @@ export class MoviesService {
   }
 
   async getMoviesCount(): Promise<number> {
-    return this.movieModel.countDocuments();
+    return this.movieModel.countDocuments().exec();
   }
 
   async saveVideoFile(fileBuffer: Buffer, filename: string): Promise<string> {
@@ -107,5 +107,13 @@ export class MoviesService {
 
   async getMovieDownloads(code: string): Promise<number> {
     return this.movieDownloadModel.countDocuments({ movieCode: code });
+  }
+
+  async getMovies(skip: number, limit: number): Promise<Movie[]> {
+    return this.movieModel.find()
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .exec();
   }
 }
