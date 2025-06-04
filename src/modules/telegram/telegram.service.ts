@@ -12,6 +12,7 @@ import { superAdminKeyboard } from './keyboards/super-admin.keyboard';
 import { adminKeyboard } from './keyboards/admin.keyboard';
 import { createSubscriptionKeyboard } from './keyboards/user.keyboard';
 import { UserRole } from '../../common/enums/user-role.enum';
+import { ConfigService } from '@nestjs/config';
 
 interface UrlButton {
   text: string;
@@ -41,20 +42,58 @@ interface BotState {
 @Injectable()
 export class TelegramService implements OnModuleInit {
   private bot: Telegraf;
+  private isDevelopment: boolean;
 
   constructor(
     private usersService: UsersService,
     private moviesService: MoviesService,
     private channelsService: ChannelsService,
     private stateService: StateService,
+    private configService: ConfigService,
   ) {
     this.bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
+    this.isDevelopment = this.configService.get('NODE_ENV') === 'development';
   }
 
   async onModuleInit() {
     await this.setupBot();
-    await this.bot.launch();
+    await this.startBot();
     console.log('Telegram bot started successfully');
+  }
+
+  private async startBot() {
+    const webhookDomain = this.configService.get('WEBHOOK_DOMAIN');
+    const secretPath = this.configService.get('TELEGRAM_BOT_TOKEN');
+
+    if (this.isDevelopment || !webhookDomain) {
+      // Use long polling in development
+      await this.bot.launch();
+      console.log('Bot started in polling mode');
+    } else {
+      // Use webhook in production
+      const webhookUrl = `${webhookDomain}/webhook/${secretPath}`;
+      
+      try {
+        // Remove any existing webhook
+        await this.bot.telegram.deleteWebhook();
+        
+        // Set the webhook
+        await this.bot.telegram.setWebhook(webhookUrl);
+        console.log(`Webhook set to: ${webhookUrl}`);
+        
+        // Get webhook info to verify
+        const webhookInfo = await this.bot.telegram.getWebhookInfo();
+        console.log('Webhook info:', webhookInfo);
+      } catch (error) {
+        console.error('Error setting webhook:', error);
+        throw error;
+      }
+    }
+  }
+
+  // Method to handle webhook updates
+  async handleUpdate(update: any) {
+    await this.bot.handleUpdate(update);
   }
 
   private async setupBot() {
@@ -97,11 +136,9 @@ export class TelegramService implements OnModuleInit {
     // Handle photo messages
     this.bot.on('photo', async (ctx) => {
       if (!ctx.from) return;
-      console.log('Received photo message');
 
       const user = await this.usersService.findOrCreateUser(ctx.from);
       const state = this.stateService.getUserState(user.telegramId);
-      console.log('User state for photo:', state);
 
       if (await this.usersService.isAdmin(user.telegramId)) {
         await this.handleMediaUpload(ctx, state, 'photo');
@@ -111,33 +148,31 @@ export class TelegramService implements OnModuleInit {
     // Handle video messages
     this.bot.on('video', async (ctx) => {
       if (!ctx.from) return;
-      console.log('Received video message');
 
       const user = await this.usersService.findOrCreateUser(ctx.from);
       const state = this.stateService.getUserState(user.telegramId);
-      console.log('User state for video:', state);
 
       if (await this.usersService.isAdmin(user.telegramId)) {
-        if (state.step === BotStep.WAITING_FOR_MOVIE_FILE || state.step === BotStep.WAITING_FOR_MOVIE_INFO) {
-          if (state.step === BotStep.WAITING_FOR_MOVIE_INFO) {
-            // If video is sent directly without code and title
-            const botUsername = (await ctx.telegram.getMe()).username;
-            await ctx.reply(
-              "Kino ma'lumotlarini kiriting:\n\n" +
-              "KOD|NOMI|TAVSIF\n\n" +
-              "Misol: ABC123|Kino nomi|Kino haqida"
-            );
+        if (state.step === BotStep.WAITING_FOR_MOVIE_FILE) { //  || state.step === BotStep.WAITING_FOR_MOVIE_INFO
+          // if (state.step === BotStep.WAITING_FOR_MOVIE_INFO) {
+          //   // If video is sent directly without code and title
+          //   const botUsername = (await ctx.telegram.getMe()).username;
+          //   await ctx.reply(
+          //     "Kino ma'lumotlarini kiriting:\n\n" +
+          //     "KOD|NOMI|TAVSIF\n\n" +
+          //     "Misol: ABC123|Kino nomi|Kino haqida"
+          //   );
             
-            // Save video info in state
-            this.stateService.setTempData(ctx.from.id, {
-              movieFile: {
-                fileId: ctx.message.video.file_id,
-                originalCaption: ctx.message.caption || '',
-                filePath: ''
-              }
-            });
-            return;
-          }
+          //   // Save video info in state
+          //   this.stateService.setTempData(ctx.from.id, {
+          //     movieFile: {
+          //       fileId: ctx.message.video.file_id,
+          //       originalCaption: ctx.message.caption || '',
+          //       filePath: ''
+          //     }
+          //   });
+          //   return;
+          // }
           await this.handleVideoUpload(ctx, state, 'video');
         } else {
           await this.handleMediaUpload(ctx, state, 'video');
@@ -147,14 +182,41 @@ export class TelegramService implements OnModuleInit {
 
     // Handle callback queries
     this.bot.on('callback_query', async (ctx) => {
+      
       if (!ctx.from) return;
-
-      if (ctx.callbackQuery && 'data' in ctx.callbackQuery) {
-        const data = (ctx.callbackQuery as any).data;
+      
+      if ('data' in ctx.callbackQuery) {
+        const data = ctx.callbackQuery.data;
         
-        if (data === 'check_subscription') {
+        if (data.startsWith('p')) {
+          try {
+            const targetPage = parseInt(data.substring(1));
+            await this.showMoviesList(ctx, targetPage);
+            await ctx.answerCbQuery();
+          } catch (error) {
+            console.error('Error in pagination handler:', error);
+            await ctx.answerCbQuery('Xatolik yuz berdi');
+          }
+        } else if (data === 'check_subscription') {
           await this.checkUserSubscription(ctx);
         }
+      }
+    });
+
+    // Simple pagination handler with direct page numbers
+    this.bot.action(/^p(\d+)$/, async (ctx) => {
+      try {
+        if (!ctx.from) {
+          return;
+        }
+        
+        const targetPage = parseInt(ctx.match[1]);
+        
+        await this.showMoviesList(ctx, targetPage);
+        await ctx.answerCbQuery();
+      } catch (error) {
+        console.error('Error in pagination handler:', error);
+        await ctx.answerCbQuery('Xatolik yuz berdi');
       }
     });
   }
@@ -184,8 +246,6 @@ export class TelegramService implements OnModuleInit {
     if (!ctx.from || !ctx.message) return;
     const isSuperAdmin = await this.usersService.isSuperAdmin(ctx.from.id);
 
-    console.log('Admin text handler - Current state:', state);
-    console.log('Received text:', text);
 
     switch (text) {
       case '👥 Userlar soni':
@@ -202,7 +262,7 @@ export class TelegramService implements OnModuleInit {
           await ctx.reply('❌ Hozircha adminlar mavjud emas.');
         } else {
           const adminList = regularAdmins.map(admin => {
-            console.log(admin)
+            
             const displayName = `${admin.username} ${admin.firstName}${admin.lastName ? ' ' + admin.lastName : ''} - <code>${admin.telegramId}</code>`;
             return `👨‍💼 Admin: @${displayName}`;
           }).join('\n');
@@ -239,16 +299,16 @@ export class TelegramService implements OnModuleInit {
 
       case "📺 Kanal qo'shish":
         await ctx.reply("Kanal ma'lumotlarini quyidagi formatda yuboring:\n\n" +
-          "KANAL_ID|NOMI|INVITE_LINK\n\n" +
+          "KANAL_ID|NOMI|LINK\n\n" +
           "Misol:\n" +
           "Ochiq kanal uchun:\n" +
-          "-1001234567890|@mychannel|My Channel|t.me/mychannel\n\n" +
+          "-1001234567890|obuna bo'ling|@mychannel\n\n" +
           "Yopiq kanal uchun:\n" +
-          "-1001234567890|My Channel|https://t.me/+dasffsafadasdas\n\n" +
+          "-1001234567890|obuna bo'ling|https://t.me/+vYbyF6EdvGIzYzRi\n\n" +
           "⚠️ Eslatma:\n" +
           "- KANAL_ID - majburiy\n" +
           "- NOMI - majburiy\n" +
-          "- INVITE_LINK - majburiy (yopiq kanal uchun to'liq invite link)");
+          "- LINK - majburiy (ochiq kanal uchun @username, yopiq kanal uchun invite link)");
         this.stateService.setUserStep(ctx.from.id, BotStep.WAITING_FOR_CHANNEL_INFO);
         break;
 
@@ -365,27 +425,6 @@ export class TelegramService implements OnModuleInit {
         this.stateService.setUserStep(ctx.from.id, BotStep.VIEWING_MOVIES);
         break;
 
-      case '⬅️ Oldingi':
-        if (state.step === BotStep.VIEWING_MOVIES) {
-          const currentPage = state.page || 1;
-          if (currentPage > 1) {
-            await this.showMoviesList(ctx, currentPage - 1);
-          }
-        }
-        break;
-
-      case '➡️ Keyingi':
-        if (state.step === BotStep.VIEWING_MOVIES) {
-          const currentPage = state.page || 1;
-          const totalMovies = await this.moviesService.getMoviesCount();
-          const totalPages = Math.ceil(totalMovies / 10);
-          
-          if (currentPage < totalPages) {
-            await this.showMoviesList(ctx, currentPage + 1);
-          }
-        }
-        break;
-
       default:
         if (state.step === BotStep.WAITING_FOR_NEW_CAPTION) {
           const { movieFile } = state.tempData;
@@ -398,6 +437,14 @@ export class TelegramService implements OnModuleInit {
         }
         else if (state.step === BotStep.WAITING_FOR_MOVIE_CODE) {
           const { movieFile, selectedCaption } = state.tempData;
+          
+          // Check if movie with this code already exists
+          const existingMovie = await this.moviesService.getMovieByCode(text.trim().toLowerCase());
+          if (existingMovie) {
+            await ctx.reply("❌ Bunday kodli kino mavjud. Iltimos boshqa kod kiriting:");
+            return;
+          }
+
           this.stateService.setTempData(ctx.from.id, {
             movieFile,
             selectedCaption,
@@ -441,10 +488,11 @@ export class TelegramService implements OnModuleInit {
           await ctx.reply('Tanlang:', isSuperAdmin ? superAdminKeyboard() : adminKeyboard());
         }
         else if (state.step === BotStep.WAITING_FOR_CHANNEL_INFO) {
-          const [channelId, name, inviteLink] = text.split('|').map(item => item.trim());
-          if (!channelId || !name || !inviteLink) {
+          const [channelId, name, link] = text.split('|').map(item => item.trim());
+          
+          if (!channelId || !name || !link) {
             await ctx.reply("Noto'g'ri format. Qaytadan urinib ko'ring:\n\n" +
-              "KANAL_ID|NOMI|INVITE_LINK\n\n" +
+              "KANAL_ID|NOMI|LINK\n\n" +
               "Barcha maydonlar majburiy!");
             return;
           }
@@ -453,7 +501,7 @@ export class TelegramService implements OnModuleInit {
             await this.channelsService.createChannel({
               channelId,
               name,
-              inviteLink
+              inviteLink: link.startsWith('@') ? `https://t.me/${link.substring(1)}` : link
             });
             await ctx.reply('✅ Kanal muvaffaqiyatli qoʻshildi!');
           } catch (error) {
@@ -719,10 +767,6 @@ export class TelegramService implements OnModuleInit {
   private async handleMediaUpload(ctx: Context, state: any, mediaType: 'photo' | 'video') {
     if (!ctx.from || !ctx.message) return;
 
-    console.log('handleMediaUpload called');
-    console.log('Current state:', state);
-    console.log('Media type:', mediaType);
-    console.log('Message:', ctx.message);
 
     // Check if we're waiting for media
     if (state.step !== BotStep.WAITING_FOR_AD_MEDIA) {
@@ -737,8 +781,7 @@ export class TelegramService implements OnModuleInit {
     try {
       // Check if the media type matches what was selected
       const expectedType = state.tempData?.adData?.mediaType;
-      console.log('Expected media type:', expectedType);
-      console.log('Received media type:', mediaType);
+
 
       if (mediaType !== expectedType) {
         const mediaTypeText = {
@@ -753,26 +796,25 @@ export class TelegramService implements OnModuleInit {
         case 'photo':
           if ('photo' in msg && msg.photo && msg.photo.length > 0) {
             mediaId = msg.photo[msg.photo.length - 1].file_id;
-            console.log('Got photo ID:', mediaId);
+            
           }
           break;
         case 'video':
           if ('video' in msg && msg.video) {
             mediaId = msg.video.file_id;
-            console.log('Got video ID:', mediaId);
+            
           }
           break;
       }
 
       if (!mediaId) {
-        console.log('No media ID found');
         await ctx.reply('❌ Media fayli topilmadi. Qaytadan urinib ko\'ring.');
         return;
       }
 
       // Save media info to state
       const currentData = state.tempData?.adData || {};
-      console.log('Current ad data before update:', currentData);
+
       
       this.stateService.setTempData(ctx.from.id, {
         adData: {
@@ -782,7 +824,6 @@ export class TelegramService implements OnModuleInit {
         }
       });
 
-      console.log('State updated with media');
       await ctx.reply("Reklama matnini kiriting:");
       this.stateService.setUserStep(ctx.from.id, BotStep.WAITING_FOR_AD_TEXT);
     } catch (error) {
@@ -797,8 +838,6 @@ export class TelegramService implements OnModuleInit {
   private async sendAdToUsers(ctx: Context, adData: AdState, inlineButtons?: UrlButton[][]) {
     if (!ctx.from) return;
     
-    console.log('Sending ad with data:', adData);
-    console.log('Buttons:', inlineButtons);
 
     if (!adData.mediaId || !adData.mediaType) {
       await ctx.reply('❌ Xatolik: Media topilmadi');
@@ -830,7 +869,6 @@ export class TelegramService implements OnModuleInit {
 
       // Send to all users
       const users = await this.usersService.getAllUsers();
-      console.log(`Sending ad to ${users.length} users`);
       
       let successCount = 0;
       let failCount = 0;
@@ -876,35 +914,54 @@ export class TelegramService implements OnModuleInit {
     const totalPages = Math.ceil(totalMovies / 10);
 
     if (movies.length === 0) {
-        await ctx.reply('❌ Kinolar topilmadi.');
-        return;
+      await ctx.reply('❌ Kinolar topilmadi.');
+      return;
     }
 
     const moviesList = movies.map(movie => {
-        return `<code>${movie.code}</code> - ${movie.title}`;
+      return `<code>${movie.code}</code> - ${movie.title}`;
     }).join('\n');
 
     const message = `📋 Kinolar ro'yxati (${page}/${totalPages}):\n\n${moviesList}`;
 
-    const keyboard: Array<Array<string>> = [];
-    const row: Array<string> = [];
-    if (page > 1) {
-        row.push('⬅️ Oldingi');
+    // Create inline keyboard based on current page and total pages
+    const buttons: any[][] = [];
+    
+    if (page === 1 && totalPages > 1) {
+      // First page with more pages - show only next
+      buttons.push([Markup.button.callback('➡️', `p${page + 1}`)]);
+    } else if (page === totalPages && totalPages > 1) {
+      // Last page - show only previous
+      buttons.push([Markup.button.callback('⬅️', `p${page - 1}`)]);
+    } else if (page > 1 && page < totalPages) {
+      // Middle page - show both
+      buttons.push([
+        Markup.button.callback('⬅️', `p${page - 1}`),
+        Markup.button.callback('➡️', `p${page + 1}`)
+      ]);
     }
-    if (page < totalPages) {
-        row.push('➡️ Keyingi');
-    }
-    row.push('🏠 Bosh sahifa');
-    keyboard.push(row);
 
-    await ctx.reply(message, {
-        parse_mode: 'HTML',
-        reply_markup: {
-            keyboard: keyboard,
-            resize_keyboard: true,
-            one_time_keyboard: true
-        }
-    });
+    const keyboard = Markup.inlineKeyboard(buttons);
+
+    try {
+      if ('callback_query' in ctx.update && ctx.update.callback_query?.message) {
+        await ctx.editMessageText(message, {
+          parse_mode: 'HTML',
+          reply_markup: keyboard.reply_markup
+        });
+      } else {
+        await ctx.reply(message, {
+          parse_mode: 'HTML',
+          ...keyboard
+        });
+        // Show the main keyboard only when initially viewing the movies list
+        const isSuperAdmin = await this.usersService.isSuperAdmin(ctx.from.id);
+        await ctx.reply('Tanlang:', isSuperAdmin ? superAdminKeyboard() : adminKeyboard());
+      }
+    } catch (error) {
+      console.error('Error updating/sending message:', error);
+      throw error;
+    }
 
     // Save current page in state
     this.stateService.setTempData(ctx.from.id, { page });
