@@ -93,7 +93,16 @@ export class TelegramService implements OnModuleInit {
 
   // Method to handle webhook updates
   async handleUpdate(update: any) {
-    await this.bot.handleUpdate(update);
+    try {
+      if (!update || !update.update_id) {
+        console.log('Invalid update object:', update);
+        return;
+      }
+      await this.bot.handleUpdate(update);
+    } catch (error) {
+      console.error('Error in handleUpdate:', error);
+      throw error;
+    }
   }
 
   private async setupBot() {

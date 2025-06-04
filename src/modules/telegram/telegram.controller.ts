@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards, Param } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, Param, UnauthorizedException } from '@nestjs/common';
 import { TelegramService } from './telegram.service';
 import { RoleGuard } from '../auth/guards/role.guard';
 import { UserRole } from '../../common/enums/user-role.enum';
@@ -22,14 +22,26 @@ export class TelegramController {
   }
 
   @Post('webhook/:token')
-  async handleWebhook(@Param('token') token: string, @Body() update: any) {
-    // Verify token
+  async handleWebhook(
+    @Param('token') token: string,
+    @Body() update: any,
+  ) {
     if (token !== process.env.TELEGRAM_BOT_TOKEN) {
-      return { status: 'error', message: 'Invalid token' };
+      throw new UnauthorizedException('Invalid token');
     }
 
-    // Handle the update
-    await this.telegramService.handleUpdate(update);
-    return { status: 'ok' };
+    // Update obyektini tekshirish
+    if (!update || !update.update_id) {
+      console.log('Invalid update object:', update);
+      return { ok: false, error: 'Invalid update object' };
+    }
+
+    try {
+      await this.telegramService.handleUpdate(update);
+      return { ok: true };
+    } catch (error) {
+      console.error('Error handling update:', error);
+      return { ok: false, error: error.message };
+    }
   }
 }
