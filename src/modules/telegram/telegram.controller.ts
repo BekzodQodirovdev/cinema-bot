@@ -3,7 +3,7 @@ import { TelegramService } from './telegram.service';
 import { RoleGuard } from '../auth/guards/role.guard';
 import { UserRole } from '../../common/enums/user-role.enum';
 
-@Controller('telegram')
+@Controller()
 export class TelegramController {
   constructor(private readonly telegramService: TelegramService) {}
 
